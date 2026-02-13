@@ -1,6 +1,10 @@
 // Popup script - UI logic for the sync controller
 
-let offset = 0;
+// Sync point: when marked, records each video's time at the moment of sync
+// syncPoint = { aTime: 120.5, bTime: 45.2 }
+// means "A at 2:00.5 corresponds to B at 0:45.2"
+// so expectedB = stateB - syncPoint.bTime should equal stateA - syncPoint.aTime
+let syncPoint = null;
 let pollInterval = null;
 
 // Cache: tabId -> frameId that has the main video
@@ -8,29 +12,13 @@ let videoFrames = {};
 
 const $ = (id) => document.getElementById(id);
 
-// Shared function source that finds the main video in a page
-// Used by both scan and commands - must be self-contained for executeScript
-const FIND_VIDEO_SRC = `
-  const videos = Array.from(document.querySelectorAll("video"));
-  if (videos.length === 0) return null;
-  // Filter to videos that have actual dimensions and a source
-  const candidates = videos.filter(v => {
-    const w = v.videoWidth || v.clientWidth || v.offsetWidth;
-    const h = v.videoHeight || v.clientHeight || v.offsetHeight;
-    return w > 50 && h > 50;
-  });
-  const pool = candidates.length > 0 ? candidates : videos;
-  let best = null;
-  let maxArea = 0;
-  for (const v of pool) {
-    const area = (v.videoWidth || v.clientWidth || 0) * (v.videoHeight || v.clientHeight || 0);
-    if (area > maxArea || (area === maxArea && !v.paused)) {
-      maxArea = area;
-      best = v;
-    }
-  }
-  best = best || pool[0];
-`;
+function fmt(s) {
+  if (isNaN(s)) return "00:00:00";
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`;
+}
 
 // --- Tab scanning ---
 
@@ -76,7 +64,6 @@ async function scanTabs() {
         }
       });
 
-      // Pick the frame with the best video (prefer one that's playing, or has longest duration)
       let bestFrame = null;
       let bestScore = -1;
       for (const r of results) {
@@ -91,19 +78,11 @@ async function scanTabs() {
 
       if (bestFrame) {
         videoFrames[tab.id] = bestFrame.frameId;
-        videoTabs.push({
-          id: tab.id,
-          title: tab.title,
-          url: tab.url
-        });
-        console.log(`[DualSync] Tab ${tab.id} "${tab.title}" -> frame ${bestFrame.frameId}`, bestFrame.result);
+        videoTabs.push({ id: tab.id, title: tab.title, url: tab.url });
       }
-    } catch (e) {
-      // Skip
-    }
+    } catch (e) {}
   }
 
-  console.log("[DualSync] Video frames map:", JSON.stringify(videoFrames));
   populateDropdowns(videoTabs);
 }
 
@@ -142,26 +121,17 @@ async function runOnVideo(tabId, fn, args = []) {
   const tid = parseInt(tabId);
   const frameId = videoFrames[tid];
 
-  if (frameId === undefined) {
-    console.log(`[DualSync] No cached frame for tab ${tid}, trying all frames`);
-  }
-
   const target = frameId !== undefined
     ? { tabId: tid, frameIds: [frameId] }
     : { tabId: tid, allFrames: true };
 
   try {
-    const results = await chrome.scripting.executeScript({
-      target,
-      func: fn,
-      args
-    });
+    const results = await chrome.scripting.executeScript({ target, func: fn, args });
 
     if (frameId !== undefined) {
       return results?.[0]?.result;
     }
 
-    // Multiple frames - find the one with a valid result
     for (const r of results) {
       if (r.result && !r.result.error) {
         videoFrames[tid] = r.frameId;
@@ -188,7 +158,6 @@ async function getState(tabId) {
     const pool = valid.length > 0 ? valid : videos;
     if (pool.length === 0) return { error: "No video found" };
 
-    // Prefer the playing video, or the largest
     let video = pool.find(v => !v.paused);
     if (!video) {
       let maxArea = 0;
@@ -201,7 +170,7 @@ async function getState(tabId) {
 
     const t = video.currentTime;
     const d = video.duration;
-    const fmt = (s) => {
+    const f = (s) => {
       if (isNaN(s)) return "00:00:00";
       const h = Math.floor(s / 3600);
       const m = Math.floor((s % 3600) / 60);
@@ -213,8 +182,8 @@ async function getState(tabId) {
       currentTime: t,
       duration: d,
       paused: video.paused,
-      formattedTime: fmt(t),
-      formattedDuration: fmt(d)
+      formattedTime: f(t),
+      formattedDuration: f(d)
     };
   });
 }
@@ -232,7 +201,6 @@ async function sendCommand(tabId, command, value) {
     const pool = valid.length > 0 ? valid : videos;
     if (pool.length === 0) return { error: "No video" };
 
-    // Prefer the playing video for pause, or the largest for play
     let video = pool.find(v => !v.paused);
     if (!video) {
       let maxArea = 0;
@@ -246,10 +214,8 @@ async function sendCommand(tabId, command, value) {
     switch (cmd) {
       case "play": video.play(); break;
       case "pause":
-        // Pause ALL videos in this frame to prevent ghost audio
         pool.forEach(v => { try { v.pause(); } catch(e) {} });
         break;
-      case "toggle": video.paused ? video.play() : video.pause(); break;
       case "seek": video.currentTime = val; break;
       case "nudge": video.currentTime += val; break;
     }
@@ -271,6 +237,7 @@ async function updateDisplay() {
   const stateA = await getState(tabAId);
   const stateB = await getState(tabBId);
 
+  // Update Video A display
   if (stateA && !stateA.error) {
     $("timeA").textContent = stateA.formattedTime;
     $("durationA").textContent = stateA.formattedDuration;
@@ -283,6 +250,7 @@ async function updateDisplay() {
     $("durationA").textContent = "";
   }
 
+  // Update Video B display
   if (stateB && !stateB.error) {
     $("timeB").textContent = stateB.formattedTime;
     $("durationB").textContent = stateB.formattedDuration;
@@ -295,21 +263,50 @@ async function updateDisplay() {
     $("durationB").textContent = "";
   }
 
+  // Sync status
+  const statusEl = $("syncStatus");
+  if (!syncPoint) {
+    statusEl.className = "sync-status unset";
+    statusEl.textContent = "Start both videos, then mark sync point";
+    return;
+  }
+
   if (stateA && stateB && !stateA.error && !stateB.error) {
-    const expectedBTime = stateA.currentTime + offset;
-    const drift = Math.abs(stateB.currentTime - expectedBTime);
-    const statusEl = $("syncStatus");
-    if (drift < 0.5) {
+    // How far A has progressed since sync point
+    const aElapsed = stateA.currentTime - syncPoint.aTime;
+    // How far B has progressed since sync point
+    const bElapsed = stateB.currentTime - syncPoint.bTime;
+    // Drift = difference in elapsed times
+    const drift = bElapsed - aElapsed;
+    const absDrift = Math.abs(drift);
+
+    if (absDrift < 0.5) {
       statusEl.className = "sync-status synced";
-      statusEl.textContent = `✓ In sync (drift: ${drift.toFixed(1)}s)`;
-    } else if (drift < 2) {
+      statusEl.textContent = `✓ In sync`;
+    } else if (absDrift < 2) {
+      const dir = drift > 0 ? "ahead" : "behind";
       statusEl.className = "sync-status drifting";
-      statusEl.textContent = `⚠ Slight drift: ${drift.toFixed(1)}s`;
+      statusEl.textContent = `⚠ B is ${absDrift.toFixed(1)}s ${dir}`;
     } else {
+      const dir = drift > 0 ? "ahead" : "behind";
       statusEl.className = "sync-status off";
-      statusEl.textContent = `✗ Out of sync: ${drift.toFixed(1)}s — click "Sync B to A"`;
+      statusEl.textContent = `✗ B is ${absDrift.toFixed(1)}s ${dir} — nudge or re-sync`;
     }
   }
+}
+
+// --- Sync point display ---
+
+function updateSyncPointDisplay() {
+  const info = $("syncPointInfo");
+  if (!syncPoint) {
+    info.innerHTML = "<div>No sync point set</div>";
+    return;
+  }
+  info.innerHTML = `
+    <div><span class="label">A was at</span> <span class="value">${fmt(syncPoint.aTime)}</span></div>
+    <div><span class="label">B was at</span> <span class="value">${fmt(syncPoint.bTime)}</span></div>
+  `;
 }
 
 // --- Controls ---
@@ -322,33 +319,64 @@ $("playBoth").addEventListener("click", async () => {
 });
 
 $("pauseBoth").addEventListener("click", async () => {
-  console.log("[DualSync] Pause clicked. TabA:", $("tabA").value, "TabB:", $("tabB").value);
-  console.log("[DualSync] Cached frames:", JSON.stringify(videoFrames));
-  const rA = await sendCommand($("tabA").value, "pause");
-  console.log("[DualSync] Pause A result:", JSON.stringify(rA));
-  const rB = await sendCommand($("tabB").value, "pause");
-  console.log("[DualSync] Pause B result:", JSON.stringify(rB));
+  await sendCommand($("tabA").value, "pause");
+  await sendCommand($("tabB").value, "pause");
 });
 
-$("syncNow").addEventListener("click", async () => {
+// Mark as synced: snapshot both videos' current times
+$("markSync").addEventListener("click", async () => {
   const stateA = await getState($("tabA").value);
-  if (stateA && !stateA.error) {
-    const targetBTime = stateA.currentTime + offset;
-    await sendCommand($("tabB").value, "seek", targetBTime);
+  const stateB = await getState($("tabB").value);
+
+  if (!stateA || stateA.error || !stateB || stateB.error) {
+    $("syncStatus").className = "sync-status off";
+    $("syncStatus").textContent = "Could not read both videos — make sure both are playing";
+    return;
   }
+
+  syncPoint = {
+    aTime: stateA.currentTime,
+    bTime: stateB.currentTime
+  };
+
+  updateSyncPointDisplay();
+  console.log("[DualSync] Sync point set:", syncPoint);
 });
 
-$("resetOffset").addEventListener("click", () => {
-  offset = 0;
-  $("offsetValue").textContent = "0.0s";
-});
-
+// Nudge: physically seeks Video B forward or back
 document.querySelectorAll("[data-nudge]").forEach((btn) => {
-  btn.addEventListener("click", () => {
+  btn.addEventListener("click", async () => {
     const nudge = parseFloat(btn.dataset.nudge);
-    offset += nudge;
-    $("offsetValue").textContent = offset.toFixed(1) + "s";
+    await sendCommand($("tabB").value, "nudge", nudge);
+
+    // Update the sync point to reflect the nudge so drift stays accurate
+    if (syncPoint) {
+      syncPoint.bTime -= nudge; // if we nudged B forward, its reference point is effectively earlier
+    }
+    updateSyncPointDisplay();
   });
+});
+
+// Re-sync: seek B to where it should be based on A's current position
+$("resync").addEventListener("click", async () => {
+  if (!syncPoint) {
+    $("syncStatus").textContent = "Set a sync point first";
+    return;
+  }
+
+  const stateA = await getState($("tabA").value);
+  if (!stateA || stateA.error) return;
+
+  const aElapsed = stateA.currentTime - syncPoint.aTime;
+  const targetBTime = syncPoint.bTime + aElapsed;
+
+  await sendCommand($("tabB").value, "seek", targetBTime);
+});
+
+// Clear sync
+$("clearSync").addEventListener("click", () => {
+  syncPoint = null;
+  updateSyncPointDisplay();
 });
 
 $("tabA").addEventListener("change", () => chrome.storage.local.set({ tabA: $("tabA").value }));
@@ -357,11 +385,6 @@ $("tabB").addEventListener("change", () => chrome.storage.local.set({ tabB: $("t
 // --- Init ---
 
 async function init() {
-  const stored = await chrome.storage.local.get(["offset"]);
-  if (stored.offset !== undefined) {
-    offset = stored.offset;
-    $("offsetValue").textContent = offset.toFixed(1) + "s";
-  }
   await scanTabs();
   startPolling();
 }
