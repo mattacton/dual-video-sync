@@ -342,6 +342,7 @@ $("markSync").addEventListener("click", async () => {
     bTime: stateB.currentTime
   };
 
+  await chrome.storage.local.set({ syncPoint, tabA: $("tabA").value, tabB: $("tabB").value });
   updateSyncPointDisplay();
   console.log("[DualSync] Sync point set:", syncPoint);
 });
@@ -370,7 +371,9 @@ $("snapBack").addEventListener("click", async () => {
 // Clear sync
 $("clearSync").addEventListener("click", () => {
   syncPoint = null;
+  chrome.storage.local.remove(["syncPoint"]);
   updateSyncPointDisplay();
+  $("snapBack").style.display = "none";
 });
 
 $("tabA").addEventListener("change", () => chrome.storage.local.set({ tabA: $("tabA").value }));
@@ -379,7 +382,19 @@ $("tabB").addEventListener("change", () => chrome.storage.local.set({ tabB: $("t
 // --- Init ---
 
 async function init() {
+  const stored = await chrome.storage.local.get(["syncPoint", "tabA", "tabB"]);
+
+  if (stored.syncPoint) {
+    syncPoint = stored.syncPoint;
+    updateSyncPointDisplay();
+  }
+
   await scanTabs();
+
+  // Restore tab selections after scan populates dropdowns
+  if (stored.tabA) $("tabA").value = stored.tabA;
+  if (stored.tabB) $("tabB").value = stored.tabB;
+
   startPolling();
 }
 
