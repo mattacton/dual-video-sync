@@ -2,13 +2,35 @@
 
 let offset = 0;
 let pollInterval = null;
-let tabAId = null;
-let tabBId = null;
 
-// Cache: tabId -> frameId that contains the video
+// Cache: tabId -> frameId that has the main video
 let videoFrames = {};
 
 const $ = (id) => document.getElementById(id);
+
+// Shared function source that finds the main video in a page
+// Used by both scan and commands - must be self-contained for executeScript
+const FIND_VIDEO_SRC = `
+  const videos = Array.from(document.querySelectorAll("video"));
+  if (videos.length === 0) return null;
+  // Filter to videos that have actual dimensions and a source
+  const candidates = videos.filter(v => {
+    const w = v.videoWidth || v.clientWidth || v.offsetWidth;
+    const h = v.videoHeight || v.clientHeight || v.offsetHeight;
+    return w > 50 && h > 50;
+  });
+  const pool = candidates.length > 0 ? candidates : videos;
+  let best = null;
+  let maxArea = 0;
+  for (const v of pool) {
+    const area = (v.videoWidth || v.clientWidth || 0) * (v.videoHeight || v.clientHeight || 0);
+    if (area > maxArea || (area === maxArea && !v.paused)) {
+      maxArea = area;
+      best = v;
+    }
+  }
+  best = best || pool[0];
+`;
 
 // --- Tab scanning ---
 
@@ -29,34 +51,59 @@ async function scanTabs() {
       continue;
     }
 
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise(r => setTimeout(r, 500));
 
     try {
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id, allFrames: true },
         func: () => {
-          const videos = document.querySelectorAll("video");
-          return videos.length > 0;
+          const videos = Array.from(document.querySelectorAll("video"));
+          const valid = videos.filter(v => {
+            const w = v.videoWidth || v.clientWidth || v.offsetWidth;
+            const h = v.videoHeight || v.clientHeight || v.offsetHeight;
+            return w > 50 && h > 50;
+          });
+          if (valid.length > 0) {
+            const v = valid[0];
+            return {
+              hasVideo: true,
+              playing: !v.paused,
+              duration: v.duration,
+              size: `${v.videoWidth}x${v.videoHeight}`
+            };
+          }
+          return { hasVideo: false };
         }
       });
 
+      // Pick the frame with the best video (prefer one that's playing, or has longest duration)
+      let bestFrame = null;
+      let bestScore = -1;
       for (const r of results) {
-        if (r.result === true) {
-          videoFrames[tab.id] = r.frameId;
-          videoTabs.push({
-            id: tab.id,
-            title: tab.title,
-            url: tab.url
-          });
-          break; // one video per tab is enough
+        if (r.result?.hasVideo) {
+          const score = (r.result.playing ? 1000 : 0) + (r.result.duration || 0);
+          if (score > bestScore) {
+            bestScore = score;
+            bestFrame = r;
+          }
         }
+      }
+
+      if (bestFrame) {
+        videoFrames[tab.id] = bestFrame.frameId;
+        videoTabs.push({
+          id: tab.id,
+          title: tab.title,
+          url: tab.url
+        });
+        console.log(`[DualSync] Tab ${tab.id} "${tab.title}" -> frame ${bestFrame.frameId}`, bestFrame.result);
       }
     } catch (e) {
       // Skip
     }
   }
 
-  console.log("[DualSync] Video frames:", videoFrames);
+  console.log("[DualSync] Video frames map:", JSON.stringify(videoFrames));
   populateDropdowns(videoTabs);
 }
 
@@ -88,30 +135,17 @@ function populateDropdowns(videoTabs) {
   }
 }
 
-// --- Video commands via executeScript ---
-
-function videoFunc() {
-  // This function runs in the page context
-  // It receives args via the IIFE wrapper below
-  const videos = document.querySelectorAll("video");
-  if (videos.length === 0) return { error: "No video found" };
-
-  let video = null;
-  let maxArea = 0;
-  videos.forEach(v => {
-    const area = v.videoWidth * v.videoHeight || v.clientWidth * v.clientHeight;
-    if (area > maxArea) { maxArea = area; video = v; }
-  });
-  video = video || videos[0];
-  return video ? true : null;
-}
+// --- Core execution helper ---
 
 async function runOnVideo(tabId, fn, args = []) {
   if (!tabId) return null;
   const tid = parseInt(tabId);
   const frameId = videoFrames[tid];
 
-  // If we don't have a cached frameId, try all frames
+  if (frameId === undefined) {
+    console.log(`[DualSync] No cached frame for tab ${tid}, trying all frames`);
+  }
+
   const target = frameId !== undefined
     ? { tabId: tid, frameIds: [frameId] }
     : { tabId: tid, allFrames: true };
@@ -123,13 +157,15 @@ async function runOnVideo(tabId, fn, args = []) {
       args
     });
 
-    // If targeting all frames, find the one that didn't error
-    if (results.length > 1) {
-      for (const r of results) {
-        if (r.result && !r.result.error) {
-          videoFrames[tid] = r.frameId; // cache it
-          return r.result;
-        }
+    if (frameId !== undefined) {
+      return results?.[0]?.result;
+    }
+
+    // Multiple frames - find the one with a valid result
+    for (const r of results) {
+      if (r.result && !r.result.error) {
+        videoFrames[tid] = r.frameId;
+        return r.result;
       }
     }
     return results?.[0]?.result;
@@ -139,18 +175,29 @@ async function runOnVideo(tabId, fn, args = []) {
   }
 }
 
+// --- Get video state ---
+
 async function getState(tabId) {
   return runOnVideo(tabId, () => {
-    const videos = document.querySelectorAll("video");
-    if (videos.length === 0) return { error: "No video found" };
-
-    let video = null;
-    let maxArea = 0;
-    videos.forEach(v => {
-      const area = v.videoWidth * v.videoHeight || v.clientWidth * v.clientHeight;
-      if (area > maxArea) { maxArea = area; video = v; }
+    const videos = Array.from(document.querySelectorAll("video"));
+    const valid = videos.filter(v => {
+      const w = v.videoWidth || v.clientWidth || v.offsetWidth;
+      const h = v.videoHeight || v.clientHeight || v.offsetHeight;
+      return w > 50 && h > 50;
     });
-    video = video || videos[0];
+    const pool = valid.length > 0 ? valid : videos;
+    if (pool.length === 0) return { error: "No video found" };
+
+    // Prefer the playing video, or the largest
+    let video = pool.find(v => !v.paused);
+    if (!video) {
+      let maxArea = 0;
+      for (const v of pool) {
+        const area = (v.videoWidth || v.clientWidth || 0) * (v.videoHeight || v.clientHeight || 0);
+        if (area > maxArea) { maxArea = area; video = v; }
+      }
+    }
+    video = video || pool[0];
 
     const t = video.currentTime;
     const d = video.duration;
@@ -172,22 +219,36 @@ async function getState(tabId) {
   });
 }
 
+// --- Send command ---
+
 async function sendCommand(tabId, command, value) {
   return runOnVideo(tabId, (cmd, val) => {
-    const videos = document.querySelectorAll("video");
-    if (videos.length === 0) return { error: "No video" };
-
-    let video = null;
-    let maxArea = 0;
-    videos.forEach(v => {
-      const area = v.videoWidth * v.videoHeight || v.clientWidth * v.clientHeight;
-      if (area > maxArea) { maxArea = area; video = v; }
+    const videos = Array.from(document.querySelectorAll("video"));
+    const valid = videos.filter(v => {
+      const w = v.videoWidth || v.clientWidth || v.offsetWidth;
+      const h = v.videoHeight || v.clientHeight || v.offsetHeight;
+      return w > 50 && h > 50;
     });
-    video = video || videos[0];
+    const pool = valid.length > 0 ? valid : videos;
+    if (pool.length === 0) return { error: "No video" };
+
+    // Prefer the playing video for pause, or the largest for play
+    let video = pool.find(v => !v.paused);
+    if (!video) {
+      let maxArea = 0;
+      for (const v of pool) {
+        const area = (v.videoWidth || v.clientWidth || 0) * (v.videoHeight || v.clientHeight || 0);
+        if (area > maxArea) { maxArea = area; video = v; }
+      }
+    }
+    video = video || pool[0];
 
     switch (cmd) {
       case "play": video.play(); break;
-      case "pause": video.pause(); break;
+      case "pause":
+        // Pause ALL videos in this frame to prevent ghost audio
+        pool.forEach(v => { try { v.pause(); } catch(e) {} });
+        break;
       case "toggle": video.paused ? video.play() : video.pause(); break;
       case "seek": video.currentTime = val; break;
       case "nudge": video.currentTime += val; break;
@@ -204,8 +265,8 @@ function startPolling() {
 }
 
 async function updateDisplay() {
-  tabAId = $("tabA").value;
-  tabBId = $("tabB").value;
+  const tabAId = $("tabA").value;
+  const tabBId = $("tabB").value;
 
   const stateA = await getState(tabAId);
   const stateB = await getState(tabBId);
@@ -290,12 +351,8 @@ document.querySelectorAll("[data-nudge]").forEach((btn) => {
   });
 });
 
-$("tabA").addEventListener("change", () => {
-  chrome.storage.local.set({ tabA: $("tabA").value });
-});
-$("tabB").addEventListener("change", () => {
-  chrome.storage.local.set({ tabB: $("tabB").value });
-});
+$("tabA").addEventListener("change", () => chrome.storage.local.set({ tabA: $("tabA").value }));
+$("tabB").addEventListener("change", () => chrome.storage.local.set({ tabB: $("tabB").value }));
 
 // --- Init ---
 
