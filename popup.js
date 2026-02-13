@@ -193,7 +193,7 @@ async function sendCommand(tabId, command, value) {
       case "nudge": video.currentTime += val; break;
     }
     return { ok: true, currentTime: video.currentTime, paused: video.paused };
-  }, [command, value]);
+  }, [command, value ?? null]);
 }
 
 // --- Polling ---
@@ -261,8 +261,12 @@ $("playBoth").addEventListener("click", async () => {
 });
 
 $("pauseBoth").addEventListener("click", async () => {
-  await sendCommand($("tabA").value, "pause");
-  await sendCommand($("tabB").value, "pause");
+  console.log("[DualSync] Pause clicked. TabA:", $("tabA").value, "TabB:", $("tabB").value);
+  console.log("[DualSync] Cached frames:", JSON.stringify(videoFrames));
+  const rA = await sendCommand($("tabA").value, "pause");
+  console.log("[DualSync] Pause A result:", JSON.stringify(rA));
+  const rB = await sendCommand($("tabB").value, "pause");
+  console.log("[DualSync] Pause B result:", JSON.stringify(rB));
 });
 
 $("syncNow").addEventListener("click", async () => {
