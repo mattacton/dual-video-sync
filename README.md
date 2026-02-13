@@ -18,7 +18,7 @@ Built for watching Katee Sackhoff react to Battlestar Galactica on Patreon while
 1. **Download or clone this repo**
 
    ```
-   git clone https://github.com/YOUR_USERNAME/dual-video-sync.git
+   git clone https://github.com/mattacton/dual-video-sync.git
    ```
 
    Or click **Code → Download ZIP** and extract it.
