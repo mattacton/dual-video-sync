@@ -1,6 +1,6 @@
 // Popup script - UI logic for the sync controller
 
-let offset = 0; // seconds: B's time = A's time + offset
+let offset = 0;
 let pollInterval = null;
 let tabAId = null;
 let tabBId = null;
@@ -10,34 +10,37 @@ const $ = (id) => document.getElementById(id);
 // --- Tab scanning ---
 
 async function scanTabs() {
-  // Get all tabs in the current window
   const tabs = await chrome.tabs.query({});
   const videoTabs = [];
 
   for (const tab of tabs) {
-    // Skip chrome:// and extension pages
     if (!tab.url || tab.url.startsWith("chrome") || tab.url.startsWith("about")) continue;
 
     try {
-      // Try injecting the content script first in case it hasn't loaded
       await chrome.scripting.executeScript({
         target: { tabId: tab.id, allFrames: true },
         files: ["content.js"]
       });
     } catch (e) {
-      // Injection failed (restricted page), skip
       continue;
     }
 
+    await new Promise(r => setTimeout(r, 300));
+
+    // Use executeScript to check for videos across all frames
+    // This returns results from ALL frames, unlike sendMessage
     try {
-      const response = await new Promise((resolve, reject) => {
-        chrome.tabs.sendMessage(tab.id, { type: "SCAN_FOR_VIDEO" }, (resp) => {
-          if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
-          else resolve(resp);
-        });
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        func: () => {
+          const videos = document.querySelectorAll("video");
+          return videos.length > 0;
+        }
       });
 
-      if (response?.hasVideo) {
+      const hasVideo = results.some(r => r.result === true);
+
+      if (hasVideo) {
         videoTabs.push({
           id: tab.id,
           title: tab.title,
@@ -45,7 +48,7 @@ async function scanTabs() {
         });
       }
     } catch (e) {
-      // No response from tab
+      // Skip
     }
   }
 
@@ -68,17 +71,13 @@ function populateDropdowns(videoTabs) {
 
   videoTabs.forEach((t) => {
     const label = truncate(t.title, 45);
-    const optA = new Option(label, t.id);
-    const optB = new Option(label, t.id);
-    selA.appendChild(optA);
-    selB.appendChild(optB);
+    selA.appendChild(new Option(label, t.id));
+    selB.appendChild(new Option(label, t.id));
   });
 
-  // Restore previous selections
   if (prevA) selA.value = prevA;
   if (prevB) selB.value = prevB;
 
-  // Auto-assign if exactly 2 video tabs found and nothing selected
   if (videoTabs.length === 2 && !prevA && !prevB) {
     selA.value = videoTabs[0].id;
     selB.value = videoTabs[1].id;
@@ -86,16 +85,62 @@ function populateDropdowns(videoTabs) {
 }
 
 // --- Video commands ---
+// Use executeScript for commands too, so we can target the right frame
+
+async function findVideoFrameId(tabId) {
+  // Find which frame has the video
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: parseInt(tabId), allFrames: true },
+      func: () => {
+        const videos = document.querySelectorAll("video");
+        if (videos.length === 0) return null;
+        let main = null;
+        let maxArea = 0;
+        videos.forEach(v => {
+          const area = v.videoWidth * v.videoHeight || v.clientWidth * v.clientHeight;
+          if (area > maxArea) { maxArea = area; main = v; }
+        });
+        return (main || videos[0]) ? true : null;
+      }
+    });
+    // Return the frameId that has a video
+    for (const r of results) {
+      if (r.result === true) return r.frameId;
+    }
+  } catch (e) {}
+  return 0; // default to main frame
+}
 
 async function sendCommand(tabId, command, value) {
   if (!tabId) return null;
   try {
-    // sendMessage to a tab goes to all frames; the one with a video will respond
-    return await chrome.tabs.sendMessage(parseInt(tabId), {
-      type: "VIDEO_COMMAND",
-      command,
-      value
+    const frameId = await findVideoFrameId(tabId);
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: parseInt(tabId), frameIds: [frameId] },
+      func: (cmd, val) => {
+        const videos = document.querySelectorAll("video");
+        if (videos.length === 0) return { error: "No video" };
+        let video = null;
+        let maxArea = 0;
+        videos.forEach(v => {
+          const area = v.videoWidth * v.videoHeight || v.clientWidth * v.clientHeight;
+          if (area > maxArea) { maxArea = area; video = v; }
+        });
+        video = video || videos[0];
+
+        switch (cmd) {
+          case "play": video.play(); break;
+          case "pause": video.pause(); break;
+          case "toggle": video.paused ? video.play() : video.pause(); break;
+          case "seek": video.currentTime = val; break;
+          case "nudge": video.currentTime += val; break;
+        }
+        return { ok: true, currentTime: video.currentTime, paused: video.paused };
+      },
+      args: [command, value]
     });
+    return results?.[0]?.result;
   } catch (e) {
     return null;
   }
@@ -104,15 +149,46 @@ async function sendCommand(tabId, command, value) {
 async function getState(tabId) {
   if (!tabId) return null;
   try {
-    return await chrome.tabs.sendMessage(parseInt(tabId), {
-      type: "GET_VIDEO_STATE"
+    const frameId = await findVideoFrameId(tabId);
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: parseInt(tabId), frameIds: [frameId] },
+      func: () => {
+        const videos = document.querySelectorAll("video");
+        if (videos.length === 0) return { error: "No video found" };
+        let video = null;
+        let maxArea = 0;
+        videos.forEach(v => {
+          const area = v.videoWidth * v.videoHeight || v.clientWidth * v.clientHeight;
+          if (area > maxArea) { maxArea = area; video = v; }
+        });
+        video = video || videos[0];
+
+        const t = video.currentTime;
+        const d = video.duration;
+        const fmt = (s) => {
+          if (isNaN(s)) return "00:00:00";
+          const h = Math.floor(s / 3600);
+          const m = Math.floor((s % 3600) / 60);
+          const sec = Math.floor(s % 60);
+          return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`;
+        };
+
+        return {
+          currentTime: t,
+          duration: d,
+          paused: video.paused,
+          formattedTime: fmt(t),
+          formattedDuration: fmt(d)
+        };
+      }
     });
+    return results?.[0]?.result;
   } catch (e) {
     return null;
   }
 }
 
-// --- Polling for timecodes ---
+// --- Polling ---
 
 function startPolling() {
   if (pollInterval) clearInterval(pollInterval);
@@ -126,7 +202,6 @@ async function updateDisplay() {
   const stateA = await getState(tabAId);
   const stateB = await getState(tabBId);
 
-  // Update Video A
   if (stateA && !stateA.error) {
     $("timeA").textContent = stateA.formattedTime;
     $("durationA").textContent = stateA.formattedDuration;
@@ -139,7 +214,6 @@ async function updateDisplay() {
     $("durationA").textContent = "";
   }
 
-  // Update Video B
   if (stateB && !stateB.error) {
     $("timeB").textContent = stateB.formattedTime;
     $("durationB").textContent = stateB.formattedDuration;
@@ -152,11 +226,9 @@ async function updateDisplay() {
     $("durationB").textContent = "";
   }
 
-  // Sync status
   if (stateA && stateB && !stateA.error && !stateB.error) {
     const expectedBTime = stateA.currentTime + offset;
     const drift = Math.abs(stateB.currentTime - expectedBTime);
-
     const statusEl = $("syncStatus");
     if (drift < 0.5) {
       statusEl.className = "sync-status synced";
@@ -198,16 +270,14 @@ $("resetOffset").addEventListener("click", () => {
   $("offsetValue").textContent = "0.0s";
 });
 
-// Nudge buttons
 document.querySelectorAll("[data-nudge]").forEach((btn) => {
   btn.addEventListener("click", () => {
     const nudge = parseFloat(btn.dataset.nudge);
     offset += nudge;
-    $("offsetValue").textContent = (offset >= 0 ? "" : "") + offset.toFixed(1) + "s";
+    $("offsetValue").textContent = offset.toFixed(1) + "s";
   });
 });
 
-// Save/restore selected tabs & offset
 $("tabA").addEventListener("change", () => {
   chrome.storage.local.set({ tabA: $("tabA").value });
 });
@@ -218,13 +288,11 @@ $("tabB").addEventListener("change", () => {
 // --- Init ---
 
 async function init() {
-  // Restore offset
   const stored = await chrome.storage.local.get(["offset"]);
   if (stored.offset !== undefined) {
     offset = stored.offset;
     $("offsetValue").textContent = offset.toFixed(1) + "s";
   }
-
   await scanTabs();
   startPolling();
 }
