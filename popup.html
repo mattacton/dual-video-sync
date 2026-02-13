@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 380px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      padding: 16px;
+    }
+
+    h1 {
+      font-size: 16px;
+      text-align: center;
+      margin-bottom: 12px;
+      color: #00d4ff;
+      letter-spacing: 1px;
+    }
+
+    .section {
+      background: #16213e;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 10px;
+      border: 1px solid #0f3460;
+    }
+
+    .section-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #888;
+      margin-bottom: 8px;
+    }
+
+    .tab-selector {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .tab-selector select {
+      flex: 1;
+      background: #0f3460;
+      color: #e0e0e0;
+      border: 1px solid #1a4080;
+      border-radius: 4px;
+      padding: 6px 8px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .tab-selector select option {
+      background: #0f3460;
+    }
+
+    .btn-scan {
+      background: #0f3460;
+      color: #00d4ff;
+      border: 1px solid #1a4080;
+      border-radius: 4px;
+      padding: 6px 10px;
+      font-size: 11px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .btn-scan:hover { background: #1a4080; }
+
+    .timecode {
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 22px;
+      text-align: center;
+      padding: 8px;
+      color: #00d4ff;
+      letter-spacing: 2px;
+    }
+
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      color: #888;
+      margin-top: 4px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 4px;
+    }
+
+    .status-dot.playing { background: #00ff88; }
+    .status-dot.paused { background: #ff6b6b; }
+    .status-dot.disconnected { background: #555; }
+
+    .controls {
+      display: flex;
+      gap: 6px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      background: #0f3460;
+      color: #e0e0e0;
+      border: 1px solid #1a4080;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn:hover { background: #1a4080; border-color: #00d4ff; }
+
+    .btn.primary {
+      background: #00d4ff;
+      color: #1a1a2e;
+      border-color: #00d4ff;
+      font-weight: 600;
+    }
+
+    .btn.primary:hover { background: #00b8e6; }
+
+    .btn.danger {
+      background: #ff6b6b;
+      color: #1a1a2e;
+      border-color: #ff6b6b;
+      font-weight: 600;
+    }
+
+    .nudge-controls {
+      display: flex;
+      gap: 4px;
+      justify-content: center;
+    }
+
+    .nudge-controls .btn {
+      padding: 6px 8px;
+      font-size: 11px;
+      font-family: "SF Mono", monospace;
+    }
+
+    .offset-display {
+      text-align: center;
+      margin: 8px 0;
+    }
+
+    .offset-value {
+      font-family: "SF Mono", monospace;
+      font-size: 18px;
+      color: #ffd700;
+    }
+
+    .offset-label {
+      font-size: 10px;
+      color: #888;
+      margin-top: 2px;
+    }
+
+    .sync-status {
+      text-align: center;
+      padding: 6px;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-top: 8px;
+    }
+
+    .sync-status.synced { background: rgba(0, 255, 136, 0.1); color: #00ff88; }
+    .sync-status.drifting { background: rgba(255, 215, 0, 0.1); color: #ffd700; }
+    .sync-status.off { background: rgba(255, 107, 107, 0.1); color: #ff6b6b; }
+
+    .divider {
+      height: 1px;
+      background: #0f3460;
+      margin: 6px 0;
+    }
+
+    .help-text {
+      font-size: 10px;
+      color: #666;
+      text-align: center;
+      margin-top: 8px;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <h1>⚡ DUAL VIDEO SYNC</h1>
+
+  <!-- Video A (Primary - the show) -->
+  <div class="section">
+    <div class="section-label">🎬 Video A — The Show</div>
+    <div class="tab-selector">
+      <select id="tabA"></select>
+      <button class="btn-scan" id="scanBtn">Scan Tabs</button>
+    </div>
+    <div class="timecode" id="timeA">--:--:--</div>
+    <div class="status-row">
+      <span><span class="status-dot disconnected" id="dotA"></span><span id="statusA">Not connected</span></span>
+      <span id="durationA"></span>
+    </div>
+  </div>
+
+  <!-- Video B (Reaction) -->
+  <div class="section">
+    <div class="section-label">🎙️ Video B — Reaction</div>
+    <div class="tab-selector">
+      <select id="tabB"></select>
+    </div>
+    <div class="timecode" id="timeB">--:--:--</div>
+    <div class="status-row">
+      <span><span class="status-dot disconnected" id="dotB"></span><span id="statusB">Not connected</span></span>
+      <span id="durationB"></span>
+    </div>
+  </div>
+
+  <!-- Master Controls -->
+  <div class="section">
+    <div class="section-label">Master Controls</div>
+    <div class="controls">
+      <button class="btn primary" id="playBoth">▶ Play Both</button>
+      <button class="btn danger" id="pauseBoth">⏸ Pause Both</button>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Offset -->
+    <div class="offset-display">
+      <div class="offset-value" id="offsetValue">0.0s</div>
+      <div class="offset-label">B offset from A (positive = B starts later in its video)</div>
+    </div>
+
+    <div class="nudge-controls">
+      <button class="btn" data-nudge="-5">-5s</button>
+      <button class="btn" data-nudge="-1">-1s</button>
+      <button class="btn" data-nudge="-0.5">-0.5</button>
+      <button class="btn" data-nudge="0.5">+0.5</button>
+      <button class="btn" data-nudge="1">+1s</button>
+      <button class="btn" data-nudge="5">+5s</button>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Sync -->
+    <div class="controls">
+      <button class="btn" id="syncNow">🔄 Sync B to A Now</button>
+      <button class="btn" id="resetOffset">Reset Offset</button>
+    </div>
+
+    <div class="sync-status off" id="syncStatus">Not monitoring</div>
+  </div>
+
+  <div class="help-text">
+    Open both videos in separate tabs, click "Scan Tabs" to detect them,<br>
+    assign each, then use master controls to keep them in sync.<br>
+    Adjust offset if the reaction video starts at a different point.
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
