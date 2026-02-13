@@ -5,6 +5,9 @@ let pollInterval = null;
 let tabAId = null;
 let tabBId = null;
 
+// Cache: tabId -> frameId that contains the video
+let videoFrames = {};
+
 const $ = (id) => document.getElementById(id);
 
 // --- Tab scanning ---
@@ -12,9 +15,10 @@ const $ = (id) => document.getElementById(id);
 async function scanTabs() {
   const tabs = await chrome.tabs.query({});
   const videoTabs = [];
+  videoFrames = {};
 
   for (const tab of tabs) {
-    if (!tab.url || tab.url.startsWith("chrome") || tab.url.startsWith("about")) continue;
+    if (!tab.url || tab.url.startsWith("chrome") || tab.url.startsWith("about") || tab.url.startsWith("edge")) continue;
 
     try {
       await chrome.scripting.executeScript({
@@ -27,8 +31,6 @@ async function scanTabs() {
 
     await new Promise(r => setTimeout(r, 300));
 
-    // Use executeScript to check for videos across all frames
-    // This returns results from ALL frames, unlike sendMessage
     try {
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id, allFrames: true },
@@ -38,20 +40,23 @@ async function scanTabs() {
         }
       });
 
-      const hasVideo = results.some(r => r.result === true);
-
-      if (hasVideo) {
-        videoTabs.push({
-          id: tab.id,
-          title: tab.title,
-          url: tab.url
-        });
+      for (const r of results) {
+        if (r.result === true) {
+          videoFrames[tab.id] = r.frameId;
+          videoTabs.push({
+            id: tab.id,
+            title: tab.title,
+            url: tab.url
+          });
+          break; // one video per tab is enough
+        }
       }
     } catch (e) {
       // Skip
     }
   }
 
+  console.log("[DualSync] Video frames:", videoFrames);
   populateDropdowns(videoTabs);
 }
 
@@ -62,7 +67,6 @@ function truncate(str, len) {
 function populateDropdowns(videoTabs) {
   const selA = $("tabA");
   const selB = $("tabB");
-
   const prevA = selA.value;
   const prevB = selB.value;
 
@@ -84,115 +88,119 @@ function populateDropdowns(videoTabs) {
   }
 }
 
-// --- Video commands ---
-// Use executeScript for commands too, so we can target the right frame
+// --- Video commands via executeScript ---
 
-async function findVideoFrameId(tabId) {
-  // Find which frame has the video
-  try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: parseInt(tabId), allFrames: true },
-      func: () => {
-        const videos = document.querySelectorAll("video");
-        if (videos.length === 0) return null;
-        let main = null;
-        let maxArea = 0;
-        videos.forEach(v => {
-          const area = v.videoWidth * v.videoHeight || v.clientWidth * v.clientHeight;
-          if (area > maxArea) { maxArea = area; main = v; }
-        });
-        return (main || videos[0]) ? true : null;
-      }
-    });
-    // Return the frameId that has a video
-    for (const r of results) {
-      if (r.result === true) return r.frameId;
-    }
-  } catch (e) {}
-  return 0; // default to main frame
+function videoFunc() {
+  // This function runs in the page context
+  // It receives args via the IIFE wrapper below
+  const videos = document.querySelectorAll("video");
+  if (videos.length === 0) return { error: "No video found" };
+
+  let video = null;
+  let maxArea = 0;
+  videos.forEach(v => {
+    const area = v.videoWidth * v.videoHeight || v.clientWidth * v.clientHeight;
+    if (area > maxArea) { maxArea = area; video = v; }
+  });
+  video = video || videos[0];
+  return video ? true : null;
 }
 
-async function sendCommand(tabId, command, value) {
+async function runOnVideo(tabId, fn, args = []) {
   if (!tabId) return null;
-  try {
-    const frameId = await findVideoFrameId(tabId);
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: parseInt(tabId), frameIds: [frameId] },
-      func: (cmd, val) => {
-        const videos = document.querySelectorAll("video");
-        if (videos.length === 0) return { error: "No video" };
-        let video = null;
-        let maxArea = 0;
-        videos.forEach(v => {
-          const area = v.videoWidth * v.videoHeight || v.clientWidth * v.clientHeight;
-          if (area > maxArea) { maxArea = area; video = v; }
-        });
-        video = video || videos[0];
+  const tid = parseInt(tabId);
+  const frameId = videoFrames[tid];
 
-        switch (cmd) {
-          case "play": video.play(); break;
-          case "pause": video.pause(); break;
-          case "toggle": video.paused ? video.play() : video.pause(); break;
-          case "seek": video.currentTime = val; break;
-          case "nudge": video.currentTime += val; break;
-        }
-        return { ok: true, currentTime: video.currentTime, paused: video.paused };
-      },
-      args: [command, value]
+  // If we don't have a cached frameId, try all frames
+  const target = frameId !== undefined
+    ? { tabId: tid, frameIds: [frameId] }
+    : { tabId: tid, allFrames: true };
+
+  try {
+    const results = await chrome.scripting.executeScript({
+      target,
+      func: fn,
+      args
     });
+
+    // If targeting all frames, find the one that didn't error
+    if (results.length > 1) {
+      for (const r of results) {
+        if (r.result && !r.result.error) {
+          videoFrames[tid] = r.frameId; // cache it
+          return r.result;
+        }
+      }
+    }
     return results?.[0]?.result;
   } catch (e) {
+    console.log("[DualSync] runOnVideo error:", e);
     return null;
   }
 }
 
 async function getState(tabId) {
-  if (!tabId) return null;
-  try {
-    const frameId = await findVideoFrameId(tabId);
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: parseInt(tabId), frameIds: [frameId] },
-      func: () => {
-        const videos = document.querySelectorAll("video");
-        if (videos.length === 0) return { error: "No video found" };
-        let video = null;
-        let maxArea = 0;
-        videos.forEach(v => {
-          const area = v.videoWidth * v.videoHeight || v.clientWidth * v.clientHeight;
-          if (area > maxArea) { maxArea = area; video = v; }
-        });
-        video = video || videos[0];
+  return runOnVideo(tabId, () => {
+    const videos = document.querySelectorAll("video");
+    if (videos.length === 0) return { error: "No video found" };
 
-        const t = video.currentTime;
-        const d = video.duration;
-        const fmt = (s) => {
-          if (isNaN(s)) return "00:00:00";
-          const h = Math.floor(s / 3600);
-          const m = Math.floor((s % 3600) / 60);
-          const sec = Math.floor(s % 60);
-          return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`;
-        };
-
-        return {
-          currentTime: t,
-          duration: d,
-          paused: video.paused,
-          formattedTime: fmt(t),
-          formattedDuration: fmt(d)
-        };
-      }
+    let video = null;
+    let maxArea = 0;
+    videos.forEach(v => {
+      const area = v.videoWidth * v.videoHeight || v.clientWidth * v.clientHeight;
+      if (area > maxArea) { maxArea = area; video = v; }
     });
-    return results?.[0]?.result;
-  } catch (e) {
-    return null;
-  }
+    video = video || videos[0];
+
+    const t = video.currentTime;
+    const d = video.duration;
+    const fmt = (s) => {
+      if (isNaN(s)) return "00:00:00";
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const sec = Math.floor(s % 60);
+      return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`;
+    };
+
+    return {
+      currentTime: t,
+      duration: d,
+      paused: video.paused,
+      formattedTime: fmt(t),
+      formattedDuration: fmt(d)
+    };
+  });
+}
+
+async function sendCommand(tabId, command, value) {
+  return runOnVideo(tabId, (cmd, val) => {
+    const videos = document.querySelectorAll("video");
+    if (videos.length === 0) return { error: "No video" };
+
+    let video = null;
+    let maxArea = 0;
+    videos.forEach(v => {
+      const area = v.videoWidth * v.videoHeight || v.clientWidth * v.clientHeight;
+      if (area > maxArea) { maxArea = area; video = v; }
+    });
+    video = video || videos[0];
+
+    switch (cmd) {
+      case "play": video.play(); break;
+      case "pause": video.pause(); break;
+      case "toggle": video.paused ? video.play() : video.pause(); break;
+      case "seek": video.currentTime = val; break;
+      case "nudge": video.currentTime += val; break;
+    }
+    return { ok: true, currentTime: video.currentTime, paused: video.paused };
+  }, [command, value]);
 }
 
 // --- Polling ---
 
 function startPolling() {
   if (pollInterval) clearInterval(pollInterval);
-  pollInterval = setInterval(updateDisplay, 500);
+  pollInterval = setInterval(updateDisplay, 750);
 }
 
 async function updateDisplay() {
