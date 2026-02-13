@@ -21,7 +21,7 @@ async function scanTabs() {
     try {
       // Try injecting the content script first in case it hasn't loaded
       await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
+        target: { tabId: tab.id, allFrames: true },
         files: ["content.js"]
       });
     } catch (e) {
@@ -90,9 +90,9 @@ function populateDropdowns(videoTabs) {
 async function sendCommand(tabId, command, value) {
   if (!tabId) return null;
   try {
-    return await chrome.runtime.sendMessage({
+    // sendMessage to a tab goes to all frames; the one with a video will respond
+    return await chrome.tabs.sendMessage(parseInt(tabId), {
       type: "VIDEO_COMMAND",
-      tabId: parseInt(tabId),
       command,
       value
     });
@@ -104,9 +104,8 @@ async function sendCommand(tabId, command, value) {
 async function getState(tabId) {
   if (!tabId) return null;
   try {
-    return await chrome.runtime.sendMessage({
-      type: "GET_VIDEO_STATE",
-      tabId: parseInt(tabId)
+    return await chrome.tabs.sendMessage(parseInt(tabId), {
+      type: "GET_VIDEO_STATE"
     });
   } catch (e) {
     return null;
