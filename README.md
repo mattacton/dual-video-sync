@@ -23,18 +23,14 @@ Built for watching Katee Sackhoff react to Battlestar Galactica on Patreon while
 
    Or click **Code → Download ZIP** and extract it.
 
-2. **Generate icons** (optional — the extension works without them)
-
-   Open `generate-icons.html` in your browser, right-click each icon, and save them into the `icons/` folder as `icon16.png`, `icon48.png`, and `icon128.png`.
-
-3. **Load into Chrome**
+2. **Load into Chrome**
 
    - Open `chrome://extensions/` in Chrome
    - Enable **Developer mode** (toggle in the top right)
    - Click **Load unpacked**
    - Select the `dual-video-sync` folder
 
-4. **Pin the extension** — click the puzzle piece icon in your toolbar and pin "Dual Video Sync" for easy access.
+3. **Pin the extension** — click the puzzle piece icon in your toolbar and pin "Dual Video Sync" for easy access.
 
 ## Usage
 
