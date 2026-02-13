@@ -272,7 +272,7 @@
     <div class="divider"></div>
 
     <div class="controls">
-      <button class="btn" id="resync">🔄 Re-sync B to match A</button>
+      <button class="btn" id="snapBack" style="display:none">🔄 Snap B back to sync</button>
       <button class="btn" id="clearSync">Clear Sync</button>
     </div>
   </div>
@@ -280,8 +280,9 @@
   <div class="help-text">
     1. Open both videos and click Scan Tabs<br>
     2. Start the reaction video, wait for "hit play"<br>
-    3. Start the show, then click "Mark as Synced Now"<br>
-    4. Use nudge buttons if B drifts
+    3. Start the show, then nudge B until it's perfect<br>
+    4. Click "Mark as Synced" to lock it in<br>
+    5. If it drifts later, click "Snap B back"
   </div>
 
   <script src="popup.js"></script>

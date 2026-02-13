@@ -283,14 +283,17 @@ async function updateDisplay() {
     if (absDrift < 0.5) {
       statusEl.className = "sync-status synced";
       statusEl.textContent = `✓ In sync`;
+      $("snapBack").style.display = "none";
     } else if (absDrift < 2) {
       const dir = drift > 0 ? "ahead" : "behind";
       statusEl.className = "sync-status drifting";
       statusEl.textContent = `⚠ B is ${absDrift.toFixed(1)}s ${dir}`;
+      $("snapBack").style.display = "";
     } else {
       const dir = drift > 0 ? "ahead" : "behind";
       statusEl.className = "sync-status off";
-      statusEl.textContent = `✗ B is ${absDrift.toFixed(1)}s ${dir} — nudge or re-sync`;
+      statusEl.textContent = `✗ B is ${absDrift.toFixed(1)}s ${dir}`;
+      $("snapBack").style.display = "";
     }
   }
 }
@@ -348,21 +351,12 @@ document.querySelectorAll("[data-nudge]").forEach((btn) => {
   btn.addEventListener("click", async () => {
     const nudge = parseFloat(btn.dataset.nudge);
     await sendCommand($("tabB").value, "nudge", nudge);
-
-    // Update the sync point to reflect the nudge so drift stays accurate
-    if (syncPoint) {
-      syncPoint.bTime -= nudge; // if we nudged B forward, its reference point is effectively earlier
-    }
-    updateSyncPointDisplay();
   });
 });
 
-// Re-sync: seek B to where it should be based on A's current position
-$("resync").addEventListener("click", async () => {
-  if (!syncPoint) {
-    $("syncStatus").textContent = "Set a sync point first";
-    return;
-  }
+// Snap back: seek B to where it should be based on sync point and A's current position
+$("snapBack").addEventListener("click", async () => {
+  if (!syncPoint) return;
 
   const stateA = await getState($("tabA").value);
   if (!stateA || stateA.error) return;
