@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head><title>Generate Icons</title></head>
+<body style="background:#222;color:#fff;font-family:sans-serif;padding:20px;">
+  <h2>Right-click each icon and "Save image as..." into your icons/ folder</h2>
+  <div style="display:flex;gap:40px;align-items:end;margin-top:20px;">
+    <div>
+      <canvas id="c16" width="16" height="16"></canvas>
+      <p>icon16.png</p>
+    </div>
+    <div>
+      <canvas id="c48" width="48" height="48"></canvas>
+      <p>icon48.png</p>
+    </div>
+    <div>
+      <canvas id="c128" width="128" height="128"></canvas>
+      <p>icon128.png</p>
+    </div>
+  </div>
+  <script>
+    function drawIcon(canvas) {
+      const s = canvas.width;
+      const ctx = canvas.getContext("2d");
+
+      // Background
+      ctx.fillStyle = "#1a1a2e";
+      ctx.beginPath();
+      ctx.roundRect(0, 0, s, s, s * 0.15);
+      ctx.fill();
+
+      // Two "play" triangles linked together
+      const cx = s / 2;
+      const cy = s / 2;
+      const r = s * 0.28;
+
+      // Left triangle (show)
+      ctx.fillStyle = "#00d4ff";
+      ctx.beginPath();
+      ctx.moveTo(cx - r * 1.1, cy - r * 0.8);
+      ctx.lineTo(cx - r * 1.1, cy + r * 0.8);
+      ctx.lineTo(cx - r * 0.2, cy);
+      ctx.closePath();
+      ctx.fill();
+
+      // Right triangle (reaction)
+      ctx.fillStyle = "#ffd700";
+      ctx.beginPath();
+      ctx.moveTo(cx + r * 0.2, cy - r * 0.8);
+      ctx.lineTo(cx + r * 0.2, cy + r * 0.8);
+      ctx.lineTo(cx + r * 1.1, cy);
+      ctx.closePath();
+      ctx.fill();
+
+      // Link line between them
+      ctx.strokeStyle = "#00ff88";
+      ctx.lineWidth = Math.max(1, s * 0.06);
+      ctx.beginPath();
+      ctx.moveTo(cx - r * 0.15, cy);
+      ctx.lineTo(cx + r * 0.15, cy);
+      ctx.stroke();
+    }
+
+    drawIcon(document.getElementById("c16"));
+    drawIcon(document.getElementById("c48"));
+    drawIcon(document.getElementById("c128"));
+  </script>
+</body>
+</html>

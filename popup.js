@@ -140,7 +140,7 @@ async function runOnVideo(tabId, fn, args = []) {
     }
     return results?.[0]?.result;
   } catch (e) {
-    console.log("[DualSync] runOnVideo error:", e);
+    console.log("[DualSync]", e);
     return null;
   }
 }
@@ -344,7 +344,6 @@ $("markSync").addEventListener("click", async () => {
 
   await chrome.storage.local.set({ syncPoint, tabA: $("tabA").value, tabB: $("tabB").value });
   updateSyncPointDisplay();
-  console.log("[DualSync] Sync point set:", syncPoint);
 });
 
 // Nudge: physically seeks Video B forward or back
