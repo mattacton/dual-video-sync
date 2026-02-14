@@ -4,6 +4,9 @@ A Chrome extension that syncs two browser-based video players — perfect for wa
 
 Built for watching Katee Sackhoff react to Battlestar Galactica on Patreon while streaming the show on Amazon Prime, but works with any two browser-based video players.
 
+![543EC8DD-08B2-412B-9C39-710DEDBA3C79_1_105_c](https://github.com/user-attachments/assets/2a72c9c5-a8d8-4bda-8e9a-222cde03985b)
+
+
 ## What it does
 
 - Detects video players across browser tabs (including embedded YouTube/Vimeo iframes)
