@@ -37,6 +37,13 @@ Built for watching Katee Sackhoff react to Battlestar Galactica on Patreon while
 
 ## Usage
 
+### Dual Sync Window
+<img width="423" height="599" alt="image" src="https://github.com/user-attachments/assets/a359d7b5-18f1-45de-9ec9-cab934b7b830" />
+<img width="423" height="604" alt="image" src="https://github.com/user-attachments/assets/0f8a5c69-b113-4ee0-99c6-b002e87e8184" />
+
+
+
+
 ### Setup
 
 1. Open the show in one browser tab (e.g., Amazon Prime Video)
